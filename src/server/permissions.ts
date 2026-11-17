@@ -1,0 +1,59 @@
+import { db } from "@/lib/db"
+import { organizationMemberships } from "@/db/schema"
+import { eq } from "drizzle-orm"
+import { getCurrentSession } from "./auth"
+
+export type UserRole =
+  | "organization_admin"
+  | "screening_staff"
+  | "clinician"
+  | "care_coordinator"
+  | "receiving_provider_staff"
+
+export const ALL_ROLES: UserRole[] = [
+  "organization_admin",
+  "screening_staff",
+  "clinician",
+  "care_coordinator",
+  "receiving_provider_staff",
+]
+
+export class AuthorizationError extends Error {
+  readonly status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+    this.name = "AuthorizationError"
+  }
+}
+
+export async function getCurrentUser() {
+  const session = await getCurrentSession()
+  return session?.user ?? null
+}
+
+export async function getCurrentMembership() {
+  const session = await getCurrentSession()
+  if (!session?.user) return null
+  const memberships = await db
+    .select()
+    .from(organizationMemberships)
+    .where(eq(organizationMemberships.userId, session.user.id))
+  return memberships[0] ?? null
+}
+
+export async function requireRole(allowedRoles: UserRole[]) {
+  const membership = await getCurrentMembership()
+  if (!membership) throw new AuthorizationError("No organization membership", 403)
+  const role = membership.role as UserRole
+  if (!allowedRoles.includes(role)) throw new AuthorizationError("Forbidden", 403)
+  return membership
+}
+
+export async function isInOrg(userId: string, orgId: string) {
+  const memberships = await db
+    .select()
+    .from(organizationMemberships)
+    .where(eq(organizationMemberships.userId, userId))
+  return memberships.some((m) => m.organizationId === orgId)
+}
