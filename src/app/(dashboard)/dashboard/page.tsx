@@ -23,9 +23,10 @@ import { cn } from "@/lib/utils"
 import { getDashboardMetrics } from "@/server/dashboard"
 import { getAttentionItems } from "@/server/dashboard"
 import { getRecentActivity } from "@/server/dashboard"
-import { getCurrentMembership } from "@/server/permissions"
+import { getAllMemberships } from "@/server/permissions"
 import { formatDateTime } from "@/modules/patients/data"
 import { CreateOrganizationCard } from "@/modules/organizations/create-organization-card"
+import { PendingInvitesCard } from "@/modules/organizations/pending-invites-card"
 
 const activityIcons: Record<string, LucideIcon> = {
   screening: ClipboardPlus,
@@ -80,10 +81,18 @@ function MetricCard({
 }
 
 export default async function DashboardPage() {
-  const membership = await getCurrentMembership()
-  if (!membership) {
+  const memberships = await getAllMemberships()
+  const activeMembership = memberships.find((m) => m.status === "active")
+  const pendingInvites = memberships.filter((m) => m.status === "invited")
+
+  if (!activeMembership) {
+    if (pendingInvites.length > 0) {
+      return <PendingInvitesCard invites={pendingInvites} />
+    }
     return <CreateOrganizationCard />
   }
+
+  const membership = activeMembership
 
   const [m, attention, activity] = await Promise.all([
     getDashboardMetrics(membership.organizationId),

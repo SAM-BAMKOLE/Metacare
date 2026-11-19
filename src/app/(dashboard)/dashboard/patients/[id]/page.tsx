@@ -126,9 +126,7 @@ export default async function PatientDetailPage({
             </dt>
             <dd className="text-sm">
               {patient.email ?? (
-                <span className="text-muted-foreground">
-                  Not provided
-                </span>
+                <span className="text-muted-foreground">Not provided</span>
               )}
             </dd>
           </div>
@@ -200,7 +198,7 @@ export default async function PatientDetailPage({
                     <TableRow key={s.id} className="group relative">
                       <TableCell className="py-3.5 pl-5">
                         <Link
-                          href={`/dashboard/patients/${patient.id}`}
+                          href={`/dashboard/screenings/${s.id}/review`}
                           className="after:absolute after:inset-0 after:content-['']"
                         >
                           <span className="block font-medium group-hover:text-primary">

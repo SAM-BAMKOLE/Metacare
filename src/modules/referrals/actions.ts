@@ -1,8 +1,13 @@
 "use server"
 
+import { redirect } from "next/navigation"
+import { z } from "zod"
+
+import { db } from "@/lib/db"
 import { getCurrentMembership, requireRole } from "@/server/permissions"
 import {
   assignOwnerByName as assignOwnerByNameServer,
+  createReferral as createReferralServer,
   transitionReferral as transitionReferralServer,
   type ReferralStatus,
 } from "@/server/referrals"
@@ -83,4 +88,60 @@ export async function transitionReferral(
   }
 
   return { ok: true }
+}
+
+export type CreateReferralResult = { error: string | null; referralId?: string }
+
+export async function createReferral(
+  _prev: CreateReferralResult,
+  formData: FormData
+): Promise<CreateReferralResult> {
+  const membership = await getCurrentMembership()
+  if (!membership) {
+    return { error: "No organisation membership found." }
+  }
+  await requireRole(["care_coordinator", "clinician"])
+
+  const schema = z.object({
+    patientId: z.string().min(1, "Patient is required."),
+    sourceScreeningEventId: z.string().optional().nullable(),
+    receivingProvider: z.string().min(1, "Receiving provider is required."),
+    priority: z.enum(["routine", "urgent", "high"]).default("routine"),
+    dueDate: z.string().optional().nullable(),
+    instructions: z.string().optional().nullable(),
+  })
+
+  const parsed = schema.safeParse({
+    patientId: formData.get("patientId"),
+    sourceScreeningEventId: formData.get("sourceScreeningEventId") ?? undefined,
+    receivingProvider: formData.get("receivingProvider"),
+    priority: formData.get("priority") ?? "routine",
+    dueDate: formData.get("dueDate") ?? undefined,
+    instructions: formData.get("instructions") ?? undefined,
+  })
+
+  if (!parsed.success) {
+    return {
+      error: parsed.error.issues[0]?.message ?? "Check the form and try again.",
+    }
+  }
+
+  try {
+    const referral = await createReferralServer(
+      {
+        patientId: parsed.data.patientId,
+        sourceScreeningEventId: parsed.data.sourceScreeningEventId,
+        receivingProvider: parsed.data.receivingProvider,
+        priority: parsed.data.priority,
+        dueDate: parsed.data.dueDate,
+        instructions: parsed.data.instructions,
+      },
+      membership.organizationId
+    )
+    return { error: null, referralId: referral.id }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : "Failed to create referral.",
+    }
+  }
 }

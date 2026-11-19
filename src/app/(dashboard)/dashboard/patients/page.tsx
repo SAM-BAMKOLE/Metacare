@@ -30,7 +30,7 @@ export default async function PatientsPage() {
             Search and manage patient records for your organisation.
           </p>
         </div>
-        <Link href="/dashboard/screenings/new" className={buttonVariants({ size: "lg" })}>
+        <Link href="/dashboard/patients/new" className={buttonVariants({ size: "lg" })}>
           <UserRoundPlus />
           Register patient
         </Link>

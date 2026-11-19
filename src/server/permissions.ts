@@ -1,5 +1,5 @@
 import { db } from "@/lib/db"
-import { organizationMemberships } from "@/db/schema"
+import { organizationMemberships, organizations } from "@/db/schema"
 import { eq } from "drizzle-orm"
 import { getCurrentSession } from "./auth"
 
@@ -36,10 +36,37 @@ export async function getCurrentMembership() {
   const session = await getCurrentSession()
   if (!session?.user) return null
   const memberships = await db
-    .select()
+    .select({
+      id: organizationMemberships.id,
+      userId: organizationMemberships.userId,
+      organizationId: organizationMemberships.organizationId,
+      role: organizationMemberships.role,
+      status: organizationMemberships.status,
+      createdAt: organizationMemberships.createdAt,
+      organizationName: organizations.name,
+    })
     .from(organizationMemberships)
+    .innerJoin(organizations, eq(organizations.id, organizationMemberships.organizationId))
     .where(eq(organizationMemberships.userId, session.user.id))
   return memberships[0] ?? null
+}
+
+export async function getAllMemberships() {
+  const session = await getCurrentSession()
+  if (!session?.user) return []
+  return db
+    .select({
+      id: organizationMemberships.id,
+      userId: organizationMemberships.userId,
+      organizationId: organizationMemberships.organizationId,
+      role: organizationMemberships.role,
+      status: organizationMemberships.status,
+      createdAt: organizationMemberships.createdAt,
+      organizationName: organizations.name,
+    })
+    .from(organizationMemberships)
+    .innerJoin(organizations, eq(organizations.id, organizationMemberships.organizationId))
+    .where(eq(organizationMemberships.userId, session.user.id))
 }
 
 export async function requireRole(allowedRoles: UserRole[]) {

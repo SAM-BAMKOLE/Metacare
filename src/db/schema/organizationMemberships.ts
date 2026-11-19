@@ -8,5 +8,6 @@ export const organizationMemberships = pgTable("organization_memberships", {
     .notNull()
     .references(() => organizations.id),
   role: text("role").notNull(),
+  status: text("status").notNull().default("active"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 })

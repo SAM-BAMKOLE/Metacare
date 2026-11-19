@@ -1,13 +1,26 @@
 "use server"
 
+import { db } from "@/lib/db"
+import {
+  organizationMemberships,
+  user as authUser,
+} from "@/db/schema"
+import { eq, and } from "drizzle-orm"
 import { getCurrentMembership } from "@/server/permissions"
 import {
   updateOrganizationName as updateOrganizationNameServer,
   changeMemberRole as changeMemberRoleServer,
   setMemberActive as setMemberActiveServer,
 } from "@/server/organizations"
+import { acceptInviteServer } from "@/modules/organizations/accept-invite"
 
 export type SettingsResult = { error: string | null }
+
+export async function acceptInvite(
+  membershipId: string
+): Promise<{ error: string | null }> {
+  return acceptInviteServer(membershipId)
+}
 
 export async function updateOrganizationName(
   name: string
@@ -59,8 +72,47 @@ export async function inviteMember(
     return { error: "Choose a role." }
   }
 
-  // Invitation email sending is out of scope for this prototype.
-  // Membership is created directly as "invited" status.
+  // Look up the user by email
+  const [existingUser] = await db
+    .select()
+    .from(authUser)
+    .where(eq(authUser.email, e))
+    .limit(1)
+
+  if (!existingUser) {
+    return {
+      error:
+        "No account found with this email. Ask them to sign up first.",
+    }
+  }
+
+  // Check if they already have a membership in this org
+  const [existingMembership] = await db
+    .select()
+    .from(organizationMemberships)
+    .where(
+      and(
+        eq(organizationMemberships.userId, existingUser.id),
+        eq(organizationMemberships.organizationId, membership.organizationId)
+      )
+    )
+    .limit(1)
+
+  if (existingMembership) {
+    return {
+      error:
+        "This user is already a member of your organisation.",
+    }
+  }
+
+  // Create the membership with "invited" status
+  await db.insert(organizationMemberships).values({
+    userId: existingUser.id,
+    organizationId: membership.organizationId,
+    role,
+    status: "invited",
+  })
+
   return { error: null }
 }
 

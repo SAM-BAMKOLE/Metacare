@@ -32,7 +32,11 @@ export default async function ClinicalReviewPage({
   params: Promise<{ id: string }>
 }) {
   const membership = await getCurrentMembership()
-  if (!membership || membership.role !== "clinician") {
+  // if (!membership || membership.role !== "clinician") {
+  if (
+    !membership ||
+    !["clinician", "organization_admin"].includes(membership.role)
+  ) {
     redirect("/dashboard")
   }
 

@@ -21,7 +21,11 @@ export type Session = typeof auth.$Infer.Session
 
 export async function getCurrentSession() {
   const cookieStore = await cookies()
-  const headers = new Headers()
-  cookieStore.getAll().forEach(({ name, value }) => headers.append(name, value))
-  return auth.api.getSession({ headers })
+  const cookieHeader = cookieStore
+    .getAll()
+    .map((c) => `${c.name}=${c.value}`)
+    .join("; ")
+  return auth.api.getSession({
+    headers: { cookie: cookieHeader },
+  })
 }

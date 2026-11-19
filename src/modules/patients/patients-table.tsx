@@ -4,7 +4,7 @@ import Link from "next/link"
 import { useMemo, useState } from "react"
 import { ChevronRight, Search, UserRoundPlus, Users } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
+import { buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
   Table,
@@ -125,10 +125,13 @@ export function PatientsTable({ patients }: { patients: Patient[] }) {
                 Try a different name or ID, or register a new patient.
               </p>
             </div>
-            <Button size="sm" className="mt-1">
+            <Link
+              href="/dashboard/patients/new"
+              className={`mt-1 ` + buttonVariants({ size: "lg" })}
+            >
               <UserRoundPlus />
               Register patient
-            </Button>
+            </Link>
           </div>
         )}
       </div>

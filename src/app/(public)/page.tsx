@@ -128,7 +128,7 @@ export default function LandingPage() {
       <section className="relative overflow-hidden">
         <div
           aria-hidden
-          className="absolute inset-x-0 top-0 -z-10 h-[520px] bg-gradient-to-b from-primary/[0.07] to-transparent"
+          className="absolute inset-x-0 top-0 -z-10 h-130 bg-linear-to-b from-primary/[0.07] to-transparent"
         />
         <div className="mx-auto grid max-w-6xl items-center gap-12 px-4 py-16 sm:px-6 lg:grid-cols-2 lg:py-24">
           <div className="space-y-6">

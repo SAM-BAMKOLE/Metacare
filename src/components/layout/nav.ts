@@ -3,6 +3,7 @@ import {
   Bell,
   ClipboardList,
   LayoutDashboard,
+  ScrollText,
   Send,
   Settings,
   Users,
@@ -63,6 +64,13 @@ export const navItems: NavItem[] = [
     icon: BarChart3,
     section: "Insights",
     roles: ["organization_admin", "care_coordinator"],
+  },
+  {
+    label: "Audit log",
+    href: "/dashboard/audit",
+    icon: ScrollText,
+    section: "Organisation",
+    roles: ["organization_admin"],
   },
   {
     label: "Settings",

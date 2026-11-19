@@ -1,5 +1,3 @@
-'use server'
-
 import { db } from "@/lib/db"
 import { clinicalReviews, screeningEvents, auditLogs } from "@/db/schema"
 import { eq, and } from "drizzle-orm"
@@ -16,6 +14,7 @@ export const createClinicalReviewSchema = z.object({
 export type CreateClinicalReviewInput = z.infer<typeof createClinicalReviewSchema>
 
 export async function createClinicalReview(input: CreateClinicalReviewInput) {
+  'use server'
   const user = await getCurrentUser()
   await requireRole(["clinician"])
 
@@ -53,12 +52,14 @@ export async function createClinicalReview(input: CreateClinicalReviewInput) {
 }
 
 export async function getClinicalReviewsForScreening(screeningEventId: string) {
+  'use server'
   return db.select().from(clinicalReviews)
     .where(eq(clinicalReviews.screeningEventId, screeningEventId))
     .orderBy(clinicalReviews.createdAt)
 }
 
 export async function getPendingClinicalReviews(organizationId: string) {
+  'use server'
   return db.select().from(screeningEvents)
     .where(
       and(
