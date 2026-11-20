@@ -16,17 +16,6 @@ export const auth = betterAuth({
   },
   session: {
     expiresIn: 60 * 60 * 24 * 7,
-    cookie: {
-      name: "better-auth.session_token",
-      domain: process.env.BETTER_AUTH_URL?.replace("https://", "").replace(
-        "http://",
-        ""
-      ),
-      path: "/",
-      sameSite: "lax",
-      secure: true, // Required for __Secure- prefix
-      httpOnly: true,
-    },
   },
 })
 
