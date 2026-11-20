@@ -5,7 +5,9 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   if (pathname.startsWith("/dashboard")) {
-    const sessionToken = request.cookies.get("better-auth.session_token")
+    const sessionToken =
+      request.cookies.get("better-auth.session_token") ??
+      request.cookies.get("__Secure-better-auth.session_token")
     if (!sessionToken) {
       return NextResponse.redirect(new URL("/sign-in", request.url))
     }
