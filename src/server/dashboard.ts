@@ -1,6 +1,13 @@
 import { db } from "@/lib/db"
-import { referrals, screeningEvents, careEvents, patients } from "@/db/schema"
-import { eq, desc } from "drizzle-orm"
+import {
+  referrals,
+  screeningEvents,
+  careEvents,
+  patients,
+  notifications,
+  notificationAttempts,
+} from "@/db/schema"
+import { eq, desc, and, gte, lte } from "drizzle-orm"
 
 export type ReferralStatus =
   | "draft"
@@ -28,6 +35,9 @@ export interface DashboardMetrics {
   referralAcknowledgementRate: number
   followUpCompletionRate: number
   averageTimeToAcknowledgementHours: number | null
+  patientCommunicationCoverageRate: number
+  patientAcknowledgementRate: number
+  documentedOutcomeRate: number
   period: { start: string; end: string }
 }
 
@@ -50,11 +60,14 @@ const OPEN_STATUSES: ReferralStatus[] = [
 
 export async function getDashboardMetrics(
   organizationId: string,
-  daysBack = 30
+  daysBack = 30,
+  opts?: { start?: Date | string; end?: Date | string }
 ): Promise<DashboardMetrics> {
   'use server'
-  const end = new Date()
-  const start = new Date(end.getTime() - daysBack * 24 * 60 * 60 * 1000)
+  const end = opts?.end ? new Date(opts.end) : new Date()
+  const start = opts?.start
+    ? new Date(opts.start)
+    : new Date(end.getTime() - daysBack * 24 * 60 * 60 * 1000)
 
   const screenings = await db
     .select()
@@ -140,6 +153,66 @@ export async function getDashboardMetrics(
     averageTimeToAcknowledgementHours = Math.round(totalHours / acknowledgedWithTimes.length)
   }
 
+  // Patient communication coverage rate: % of sent+ referrals (created in window) with patientCommunicationStatus === 'contacted'
+  const SENT_STATUSES: ReferralStatus[] = [
+    "sent",
+    "acknowledged",
+    "in_progress",
+    "awaiting_patient_action",
+    "awaiting_followup_documentation",
+    "completed",
+    "declined_or_redirected",
+  ]
+  const sentInWindow = referralsOrg.filter((r) => {
+    const status = r.status as ReferralStatus
+    const created = new Date(r.createdAt)
+    return SENT_STATUSES.includes(status) && created >= start && created <= end
+  })
+  const communicatedInWindow = sentInWindow.filter(
+    (r) => r.patientCommunicationStatus === "contacted"
+  )
+  const patientCommunicationCoverageRate = sentInWindow.length > 0
+    ? Math.round((communicatedInWindow.length / sentInWindow.length) * 100)
+    : 0
+
+  // Documented outcome rate: % of completed referrals (created in window) with closureOutcome set
+  const completedInWindow = referralsOrg.filter((r) => {
+    const status = r.status as ReferralStatus
+    const created = new Date(r.createdAt)
+    return status === "completed" && created >= start && created <= end
+  })
+  const documentedOutcomeInWindow = completedInWindow.filter(
+    (r) => Boolean(r.closureOutcome)
+  )
+  const documentedOutcomeRate = completedInWindow.length > 0
+    ? Math.round((documentedOutcomeInWindow.length / completedInWindow.length) * 100)
+    : 0
+
+  // Patient acknowledgement rate: % of notification attempts (in window) with acknowledgementAt set
+  const attemptRows = await db
+    .select({
+      id: notificationAttempts.id,
+      acknowledgementAt: notificationAttempts.acknowledgementAt,
+      attemptAt: notificationAttempts.attemptAt,
+    })
+    .from(notificationAttempts)
+    .innerJoin(notifications, eq(notificationAttempts.notificationId, notifications.id))
+    .innerJoin(referrals, eq(notifications.referralId, referrals.id))
+    .where(
+      and(
+        eq(referrals.referringOrganizationId, organizationId),
+        gte(notificationAttempts.attemptAt, start),
+        lte(notificationAttempts.attemptAt, end)
+      )
+    )
+  const patientAcknowledgementRate = attemptRows.length > 0
+    ? Math.round(
+        (attemptRows.filter((a) => a.acknowledgementAt !== null).length /
+          attemptRows.length) *
+          100
+      )
+    : 0
+
   return {
     screeningEventsRecorded,
     resultsRequiringFollowUp,
@@ -152,6 +225,9 @@ export async function getDashboardMetrics(
     referralAcknowledgementRate,
     followUpCompletionRate,
     averageTimeToAcknowledgementHours,
+    patientCommunicationCoverageRate,
+    patientAcknowledgementRate,
+    documentedOutcomeRate,
     period: { start: start.toISOString(), end: end.toISOString() },
   }
 }
@@ -248,11 +324,15 @@ export async function getStatusDistribution(
 
 export async function getWeeklyTrend(
   organizationId: string,
-  weeksBack = 12
+  weeksBack = 12,
+  opts?: { start?: Date | string; end?: Date | string }
 ): Promise<TrendPoint[]> {
   'use server'
   const now = new Date()
-  const start = new Date(now.getTime() - weeksBack * 7 * 24 * 60 * 60 * 1000)
+  const end = opts?.end ? new Date(opts.end) : now
+  const start = opts?.start
+    ? new Date(opts.start)
+    : new Date(end.getTime() - weeksBack * 7 * 24 * 60 * 60 * 1000)
 
   const rows = await db
     .select({

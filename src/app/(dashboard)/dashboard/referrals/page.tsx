@@ -37,6 +37,9 @@ export default async function ReferralsPage() {
     patientContacted: r.patientCommunicationStatus === "contacted",
   })) as QueueReferral[]
 
+  const owners = [...new Set(referrals.map((r) => r.owner).filter(Boolean))] as string[]
+  const destinations = [...new Set(referrals.map((r) => r.destination).filter(Boolean))] as string[]
+
   return (
     <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-8 sm:px-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -57,7 +60,12 @@ export default async function ReferralsPage() {
         </Link>
       </div>
 
-      <ReferralQueue initial={referrals} today={today} />
+      <ReferralQueue
+        initial={referrals}
+        today={today}
+        owners={owners}
+        destinations={destinations}
+      />
 
       <p className="text-xs text-muted-foreground">
         Overdue, blocked and awaiting-acknowledgement are flags on a referral,

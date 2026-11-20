@@ -9,6 +9,7 @@ export type NotificationType =
   | "patient_response"
   | "provider_update"
   | "escalated"
+  | "referral_created"
 
 export type Delivery = "delivered" | "failed" | "pending"
 export type NotificationChannel = "in_app" | "sms"

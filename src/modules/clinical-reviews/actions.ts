@@ -3,7 +3,11 @@
 import { redirect } from "next/navigation"
 import { z } from "zod"
 
-import { getCurrentMembership, requireRole } from "@/server/permissions"
+import {
+  AuthorizationError,
+  getCurrentMembership,
+  requireRole,
+} from "@/server/permissions"
 import { createClinicalReview as createClinicalReviewServer } from "@/server/clinical-reviews"
 
 export type ReviewState = { error: string | null }
@@ -22,7 +26,14 @@ export async function createClinicalReview(
   formData: FormData
 ): Promise<ReviewState> {
   // Only clinicians can document a clinical decision. Enforced on the server.
-  await requireRole(["clinician"])
+  try {
+    await requireRole(["clinician"])
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return { error: err.message }
+    }
+    throw err
+  }
 
   const membership = await getCurrentMembership()
   if (!membership) {

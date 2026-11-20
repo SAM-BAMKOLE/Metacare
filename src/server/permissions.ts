@@ -1,6 +1,6 @@
 import { db } from "@/lib/db"
 import { organizationMemberships, organizations } from "@/db/schema"
-import { eq } from "drizzle-orm"
+import { eq, and } from "drizzle-orm"
 import { getCurrentSession } from "./auth"
 
 export type UserRole =
@@ -83,4 +83,42 @@ export async function isInOrg(userId: string, orgId: string) {
     .from(organizationMemberships)
     .where(eq(organizationMemberships.userId, userId))
   return memberships.some((m) => m.organizationId === orgId)
+}
+
+export interface OrgUser {
+  id: string
+  name: string | null
+  email: string | null
+  role: string
+}
+
+export async function getOrgUsersByRole(
+  organizationId: string,
+  role: string
+): Promise<OrgUser[]> {
+  const { user: authUser } = await import("@/db/schema/auth")
+  const rows = await db
+    .select({
+      id: authUser.id,
+      name: authUser.name,
+      email: authUser.email,
+      role: organizationMemberships.role,
+    })
+    .from(authUser)
+    .innerJoin(
+      organizationMemberships,
+      eq(organizationMemberships.userId, authUser.id)
+    )
+    .where(
+      and(
+        eq(organizationMemberships.organizationId, organizationId),
+        eq(organizationMemberships.role, role)
+      )
+    )
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    email: r.email,
+    role: r.role,
+  }))
 }

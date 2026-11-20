@@ -19,10 +19,8 @@ import { formatDate } from "@/modules/patients/data"
 import { assignOwner, transitionReferral } from "@/modules/referrals/actions"
 import {
   categoryDefs,
-  destinations,
   inCategory,
   isOverdue,
-  owners,
   transitions,
   type QueueCategory,
   type QueueReferral,
@@ -37,9 +35,13 @@ const rowSelect =
 export function ReferralQueue({
   initial,
   today,
+  owners: ownersProp,
+  destinations: destinationsProp,
 }: {
   initial: QueueReferral[]
   today: string
+  owners?: string[]
+  destinations?: string[]
 }) {
   const [referrals, setReferrals] = useState(initial)
   const [category, setCategory] = useState<QueueCategory | "all">("all")
@@ -49,6 +51,9 @@ export function ReferralQueue({
   const [org, setOrg] = useState("all")
   const [due, setDue] = useState<"any" | "overdue" | "week">("any")
   const [, startTransition] = useTransition()
+
+  const owners = ownersProp ?? [...new Set(referrals.map((r) => r.owner).filter(Boolean))] as string[]
+  const destinations = destinationsProp ?? [...new Set(referrals.map((r) => r.destination).filter(Boolean))] as string[]
 
   const counts = useMemo(() => {
     const c = {} as Record<QueueCategory, number>

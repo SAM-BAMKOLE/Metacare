@@ -17,8 +17,10 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
+  FileCheck,
   FlaskConical,
   MailCheck,
+  Phone,
   UserX,
   type LucideIcon,
 } from "lucide-react"
@@ -50,6 +52,9 @@ interface AnalyticsDashboardProps {
     referralAcknowledgementRate: number
     followUpCompletionRate: number
     averageTimeToAcknowledgementHours: number | null
+    patientCommunicationCoverageRate: number
+    patientAcknowledgementRate: number
+    documentedOutcomeRate: number
   }
   statusDistribution: StatusCount[]
   weeklyTrend: TrendPoint[]
@@ -175,6 +180,26 @@ export default function AnalyticsDashboard({
           }
           hint="Average hours from sent to acknowledged"
           icon={Clock}
+        />
+        <Metric
+          label="Patient communication coverage"
+          value={pct(metrics.patientCommunicationCoverageRate)}
+          hint="Sent+ referrals contacted as % of all sent+ referrals"
+          icon={Phone}
+          tone={metrics.patientCommunicationCoverageRate > 0 ? "success" : "default"}
+        />
+        <Metric
+          label="Patient acknowledgement rate"
+          value={pct(metrics.patientAcknowledgementRate)}
+          hint="Attempts acknowledged as % of delivery attempts"
+          icon={MailCheck}
+        />
+        <Metric
+          label="Documented outcome rate"
+          value={pct(metrics.documentedOutcomeRate)}
+          hint="Completed referrals with a documented outcome"
+          icon={FileCheck}
+          tone={metrics.documentedOutcomeRate > 0 ? "success" : "default"}
         />
       </section>
 
@@ -325,6 +350,51 @@ export default function AnalyticsDashboard({
           </ResponsiveContainer>
         </ChartCard>
       </div>
+
+      {/* Metric definitions */}
+      <section className="rounded-xl border bg-card p-5 shadow-xs">
+        <h2 className="font-semibold mb-3">Metric definitions</h2>
+        <dl className="grid gap-2 sm:grid-cols-3 text-sm">
+          <div className="col-span-3 border-b pb-2">
+            <dt className="font-medium text-foreground">Patient communication coverage</dt>
+            <dd className="text-muted-foreground">
+              % of referrals in sent-or-later status with a recorded patient
+              communication (patientCommunicationStatus = &quot;contacted&quot;).
+              Denominator: all sent+ referrals in the selected window.
+            </dd>
+          </div>
+          <div className="col-span-3 border-b pb-2">
+            <dt className="font-medium text-foreground">Patient acknowledgement rate</dt>
+            <dd className="text-muted-foreground">
+              % of notification delivery attempts that have an acknowledgement
+              timestamp recorded.
+              Denominator: all notification attempts in the selected window.
+            </dd>
+          </div>
+          <div className="col-span-3 border-b pb-2">
+            <dt className="font-medium text-foreground">Documented outcome rate</dt>
+            <dd className="text-muted-foreground">
+              % of completed referrals with a closure outcome recorded.
+              Denominator: all completed referrals in the selected window.
+            </dd>
+          </div>
+          <div className="col-span-3 border-b pb-2">
+            <dt className="font-medium text-foreground">Referral acknowledgement rate</dt>
+            <dd className="text-muted-foreground">
+              % of sent referrals that have been acknowledged by the receiving
+              provider.
+              Denominator: all referrals in sent-or-later status.
+            </dd>
+          </div>
+          <div className="col-span-3 border-b pb-2">
+            <dt className="font-medium text-foreground">Follow-up completion rate</dt>
+            <dd className="text-muted-foreground">
+              % of eligible referrals (open or completed) that are completed.
+              Denominator: all open + completed referrals.
+            </dd>
+          </div>
+        </dl>
+      </section>
 
       {/* Disclaimer */}
       <div className="flex gap-3 rounded-xl border border-dashed bg-muted/40 p-4 text-sm text-muted-foreground">

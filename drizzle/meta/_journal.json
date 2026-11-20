@@ -15,6 +15,27 @@
       "when": 1794949203909,
       "tag": "0001_groovy_the_executioner",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795160908372,
+      "tag": "0002_flimsy_thunderbolts",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795161476121,
+      "tag": "0003_gray_tana_nile",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795168913255,
+      "tag": "0004_flashy_gwen_stacy",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,10 @@
 "use server"
 
-import { getCurrentMembership, requireRole } from "@/server/permissions"
+import {
+  AuthorizationError,
+  getCurrentMembership,
+  requireRole,
+} from "@/server/permissions"
 import {
   recordPatientCommunication as recordPatientCommunicationServer,
   acknowledgeReferral as acknowledgeReferralServer,
@@ -17,14 +21,26 @@ export async function recordPatientCommunication(
   if (!membership) {
     return { error: "No organisation membership found." }
   }
-  await requireRole([
-    "care_coordinator",
-    "clinician",
-    "screening_staff",
-  ])
+  try {
+    await requireRole([
+      "care_coordinator",
+      "clinician",
+      "screening_staff",
+    ])
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return { error: err.message }
+    }
+    throw err
+  }
 
   const channel = formData.get("channel")
+  const language = formData.get("language")
   const outcome = formData.get("outcome")
+  const acknowledgementAt = formData.get("acknowledgementAt")
+  const understanding = formData.get("understanding")
+  const concernQuestion = formData.get("concernQuestion")
+  const nextStepExplained = formData.get("nextStepExplained") === "on"
   const notes = formData.get("notes") ?? ""
 
   const allowedChannels = ["Phone call", "SMS (simulated)", "WhatsApp (simulated)", "In person"]
@@ -47,7 +63,12 @@ export async function recordPatientCommunication(
     await recordPatientCommunicationServer(
       referralId,
       String(channel),
+      String(language) || null,
       String(outcome),
+      String(acknowledgementAt) || null,
+      String(understanding) || null,
+      String(concernQuestion) || null,
+      nextStepExplained,
       String(notes).trim() || null,
       membership.userId ?? ""
     )
@@ -68,7 +89,14 @@ export async function acknowledgeReferral(
   if (!membership) {
     return { error: "No organisation membership found." }
   }
-  await requireRole(["receiving_provider_staff"])
+  try {
+    await requireRole(["receiving_provider_staff"])
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return { error: err.message }
+    }
+    throw err
+  }
 
   const decision = formData.get("decision")
   const reason = formData.get("reason") ?? ""
@@ -108,7 +136,14 @@ export async function closeReferral(
   if (!membership) {
     return { error: "No organisation membership found." }
   }
-  await requireRole(["care_coordinator", "clinician"])
+  try {
+    await requireRole(["clinician"])
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return { error: err.message }
+    }
+    throw err
+  }
 
   const outcome = formData.get("outcome")
   const reason = formData.get("reason")

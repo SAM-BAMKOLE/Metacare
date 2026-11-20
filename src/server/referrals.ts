@@ -1,8 +1,8 @@
 import { db } from "@/lib/db"
-import { referrals, careEvents, auditLogs, patients, screeningEvents } from "@/db/schema"
+import { referrals, careEvents, auditLogs, patients, screeningEvents, notificationAttempts, notifications, confirmatoryFollowUps, escalations } from "@/db/schema"
 import { eq, and, desc, isNull } from "drizzle-orm"
 import { z } from "zod"
-import { getCurrentUser } from "./permissions"
+import { getCurrentUser, requireRole } from "./permissions"
 
 export type ReferralStatus =
   | "draft"
@@ -221,7 +221,12 @@ export async function getCareEventsForPatient(patientId: string) {
 export async function recordPatientCommunication(
   referralId: string,
   channel: string,
+  language: string | null,
   outcome: string,
+  acknowledgementAt: string | null,
+  understanding: string | null,
+  concernQuestion: string | null,
+  nextStepExplained: boolean,
   notes: string | null,
   actorId: string,
 ) {
@@ -236,6 +241,29 @@ export async function recordPatientCommunication(
     actorRole: "system",
     eventType: "Patient contact attempted",
     details: notes ?? `Patient contact via ${channel}: ${outcome}`,
+  })
+
+  const [notification] = await db.insert(notifications).values({
+    referralId,
+    userId: actorId,
+    type: "patient_communication",
+    title: `Patient contact via ${channel}`,
+    content: notes ?? `Patient contact via ${channel}: ${outcome}`,
+    read: false,
+    simulated: true,
+  }).returning()
+
+  await db.insert(notificationAttempts).values({
+    notificationId: notification.id,
+    channel,
+    language,
+    outcome,
+    acknowledgementAt: acknowledgementAt ? new Date(acknowledgementAt) : null,
+    understanding,
+    concernQuestion,
+    nextStepExplained,
+    simulated: true,
+    attemptAt: new Date(),
   })
 
   const communicationStatus = outcome === "contacted" ? "contacted" : "not_contacted"
@@ -580,6 +608,56 @@ export async function getReferralDetail(
   }
 }
 
+export interface ReferralClosureReadiness {
+  clinicalReviewDocumented: boolean
+  confirmatoryFollowUpRequired: boolean
+  confirmatoryFollowUpReviewed: boolean
+  patientCommunicationRecorded: boolean
+  allPrerequisitesMet: boolean
+  missingPrerequisites: string[]
+}
+
+export async function getReferralClosureReadiness(
+  referralId: string,
+  organizationId: string
+): Promise<ReferralClosureReadiness | null> {
+  'use server'
+  const [referral] = await db.select().from(referrals)
+    .where(eq(referrals.id, referralId)).limit(1)
+  if (!referral) return null
+
+  // 1. Check clinical review documented
+  let clinicalReviewDocumented = true // no screening event = no review needed
+  if (referral.sourceScreeningEventId) {
+    const [screening] = await db.select().from(screeningEvents)
+      .where(eq(screeningEvents.id, referral.sourceScreeningEventId)).limit(1)
+    clinicalReviewDocumented = screening?.clinicianConfirmedFollowUp ?? false
+  }
+
+  // 2. Check confirmatory follow-up
+  const [followUp] = await db.select().from(confirmatoryFollowUps)
+    .where(eq(confirmatoryFollowUps.referralId, referralId)).limit(1)
+  const confirmatoryFollowUpRequired = followUp ? followUp.required === "yes" : false
+  const confirmatoryFollowUpReviewed = followUp ? followUp.status === "reviewed" : false
+
+  // 3. Check patient communication recorded
+  const patientCommunicationRecorded = referral.patientCommunicationStatus === "contacted"
+
+  const missingPrerequisites: string[] = []
+  if (!clinicalReviewDocumented) missingPrerequisites.push("Clinical review")
+  if (confirmatoryFollowUpRequired && !confirmatoryFollowUpReviewed) missingPrerequisites.push("Confirmatory follow-up review")
+  if (!patientCommunicationRecorded) missingPrerequisites.push("Patient communication")
+
+  return {
+    clinicalReviewDocumented,
+    confirmatoryFollowUpRequired,
+    confirmatoryFollowUpReviewed,
+    patientCommunicationRecorded,
+    allPrerequisitesMet: missingPrerequisites.length === 0,
+    missingPrerequisites,
+  }
+}
+
 export async function closeReferral(
   referralId: string,
   outcome: string,
@@ -605,6 +683,34 @@ export async function closeReferral(
 
   if (!acknowledged && !exceptionOutcomes.includes(outcome)) {
     throw new Error("This referral has not been acknowledged yet. Only an exception outcome can be recorded.")
+  }
+
+  // ---- Prerequisite checks (evidence-based closure) ----
+
+  // 1. Clinical review must be documented (if there's a source screening event)
+  let clinicalReviewDocumented = true // no screening event = no review needed
+  if (referral.sourceScreeningEventId) {
+    const [screening] = await db.select().from(screeningEvents)
+      .where(eq(screeningEvents.id, referral.sourceScreeningEventId)).limit(1)
+    if (!screening) {
+      throw new Error("Source screening event not found")
+    }
+    if (!screening.clinicianConfirmedFollowUp) {
+      throw new Error("Closure blocked: clinician review has not been documented for the source screening event.")
+    }
+    clinicalReviewDocumented = true
+  }
+
+  // 2. If confirmatory follow-up is required, it must be reviewed
+  const [followUp] = await db.select().from(confirmatoryFollowUps)
+    .where(eq(confirmatoryFollowUps.referralId, referralId)).limit(1)
+  if (followUp && followUp.required === "yes" && followUp.status !== "reviewed") {
+    throw new Error("Closure blocked: confirmatory follow-up must be reviewed before closure.")
+  }
+
+  // 3. Patient communication must be recorded
+  if (referral.patientCommunicationStatus !== "contacted") {
+    throw new Error("Closure blocked: patient communication has not been recorded.")
   }
 
   let toStatus: ReferralStatus
@@ -643,3 +749,228 @@ export async function closeReferral(
 
   return updated
 }
+
+export const createEscalationSchema = z.object({
+  referralId: z.string().min(1, "Referral is required"),
+  escalatedToId: z.string().min(1, "Escalated to user is required"),
+  reason: z.string().min(1, "Escalation reason is required"),
+})
+
+export type CreateEscalationInput = z.infer<typeof createEscalationSchema>
+
+export async function createEscalation(
+  referralId: string,
+  actorId: string,
+  escalatedToId: string,
+  reason: string,
+) {
+  'use server'
+
+  // Verify the referral exists
+  const [referral] = await db.select().from(referrals)
+    .where(eq(referrals.id, referralId)).limit(1)
+  if (!referral) {
+    throw new Error("Referral not found")
+  }
+
+  const [escalation] = await db.insert(escalations).values({
+    referralId: referralId,
+    escalatedBy: actorId,
+    escalatedTo: escalatedToId,
+    reason,
+  }).returning()
+
+  await db.insert(auditLogs).values({
+    actorId,
+    action: "referral.escalate",
+    entityType: "referral",
+    entityId: referralId,
+    details: `Referral ${referralId} escalated: ${reason}`,
+  })
+
+  return escalation
+}
+
+export const acknowledgeEscalationSchema = z.object({
+  escalationId: z.string().min(1, "Escalation is required"),
+})
+
+export type AcknowledgeEscalationInput = z.infer<typeof acknowledgeEscalationSchema>
+
+export async function acknowledgeEscalation(
+  escalationId: string,
+  actorId: string,
+) {
+  'use server'
+
+  const [escalation] = await db.select().from(escalations)
+    .where(eq(escalations.id, escalationId)).limit(1)
+  if (!escalation) {
+    throw new Error("Escalation not found")
+  }
+
+  const [updated] = await db.update(escalations)
+    .set({ acknowledgedAt: new Date(), acknowledgedBy: actorId })
+    .where(eq(escalations.id, escalationId))
+    .returning()
+
+  await db.insert(auditLogs).values({
+    actorId,
+    action: "referral.escalation.acknowledge",
+    entityType: "escalation",
+    entityId: escalationId,
+    details: `Escalation ${escalationId} acknowledged`,
+  })
+
+  return updated
+}
+
+export const resolveEscalationSchema = z.object({
+  escalationId: z.string().min(1, "Escalation is required"),
+  actionTaken: z.string().min(1, "Action taken is required"),
+})
+
+export type ResolveEscalationInput = z.infer<typeof resolveEscalationSchema>
+
+export async function resolveEscalation(
+  escalationId: string,
+  actorId: string,
+  actionTaken: string,
+) {
+  'use server'
+
+  const [escalation] = await db.select().from(escalations)
+    .where(eq(escalations.id, escalationId)).limit(1)
+  if (!escalation) {
+    throw new Error("Escalation not found")
+  }
+
+  const [updated] = await db.update(escalations)
+    .set({ actionTaken })
+    .where(eq(escalations.id, escalationId))
+    .returning()
+
+  await db.insert(auditLogs).values({
+    actorId,
+    action: "referral.escalation.resolve",
+    entityType: "escalation",
+    entityId: escalationId,
+    details: `Escalation ${escalationId} resolved: ${actionTaken}`,
+  })
+
+  return updated
+}
+
+export async function getEscalationsForReferral(referralId: string) {
+  'use server'
+  return db.select().from(escalations)
+    .where(eq(escalations.referralId, referralId))
+    .orderBy(escalations.createdAt)
+}
+
+export async function getEscalationsForOrg(organizationId: string) {
+  'use server'
+  const rows = await db.select({
+    id: escalations.id,
+    referralId: escalations.referralId,
+    reason: escalations.reason,
+    escalatedBy: escalations.escalatedBy,
+    escalatedTo: escalations.escalatedTo,
+    createdAt: escalations.createdAt,
+    acknowledgedAt: escalations.acknowledgedAt,
+    acknowledgedBy: escalations.acknowledgedBy,
+    actionTaken: escalations.actionTaken,
+  })
+    .from(escalations)
+    .innerJoin(referrals, eq(escalations.referralId, referrals.id))
+    .where(eq(referrals.referringOrganizationId, organizationId))
+    .orderBy(escalations.createdAt)
+
+  const userIds = new Set<string>()
+  rows.forEach((r) => {
+    if (r.escalatedBy) userIds.add(r.escalatedBy)
+    if (r.escalatedTo) userIds.add(r.escalatedTo)
+    if (r.acknowledgedBy) userIds.add(r.acknowledgedBy)
+  })
+
+  const { user: authUser } = await import("@/db/schema/auth")
+  const users = await db.select().from(authUser)
+  const userMap = new Map<string, string>()
+  for (const u of users) {
+    if (userIds.has(u.id)) {
+      userMap.set(u.id, u.name ?? u.email ?? u.id)
+    }
+  }
+
+  return rows.map((r) => ({
+    id: r.id,
+    referralId: r.referralId,
+    reason: r.reason,
+    escalatedBy: userMap.get(r.escalatedBy) ?? r.escalatedBy,
+    escalatedTo: userMap.get(r.escalatedTo) ?? r.escalatedTo,
+    createdAt: r.createdAt.toISOString(),
+    acknowledgedAt: r.acknowledgedAt?.toISOString() ?? null,
+    acknowledgedBy: r.acknowledgedBy ? userMap.get(r.acknowledgedBy) ?? r.acknowledgedBy : "",
+    actionTaken: r.actionTaken,
+  }))
+}
+
+export interface NotificationAttemptItem {
+  id: string
+  channel: string
+  language: string | null
+  outcome: string
+  acknowledgementAt: string | null
+  understanding: string | null
+  concernQuestion: string | null
+  nextStepExplained: boolean
+  attemptAt: string
+  actor: string
+}
+
+export async function getNotificationAttemptsForReferral(
+  referralId: string
+): Promise<NotificationAttemptItem[]> {
+  'use server'
+  const rows = await db
+    .select({
+      id: notificationAttempts.id,
+      channel: notificationAttempts.channel,
+      language: notificationAttempts.language,
+      outcome: notificationAttempts.outcome,
+      acknowledgementAt: notificationAttempts.acknowledgementAt,
+      understanding: notificationAttempts.understanding,
+      concernQuestion: notificationAttempts.concernQuestion,
+      nextStepExplained: notificationAttempts.nextStepExplained,
+      attemptAt: notificationAttempts.attemptAt,
+      actorId: notifications.userId,
+    })
+    .from(notificationAttempts)
+    .innerJoin(notifications, eq(notificationAttempts.notificationId, notifications.id))
+    .where(eq(notifications.referralId, referralId))
+    .orderBy(notificationAttempts.attemptAt)
+
+  const actorIds = new Set(rows.map((r) => r.actorId))
+  const { user: authUser } = await import("@/db/schema/auth")
+  const users = await db.select().from(authUser)
+  const userMap = new Map<string, string>()
+  for (const u of users) {
+    if (actorIds.has(u.id)) {
+      userMap.set(u.id, u.name ?? u.email ?? u.id)
+    }
+  }
+
+  return rows.map((r) => ({
+    id: r.id,
+    channel: r.channel,
+    language: r.language,
+    outcome: r.outcome,
+    acknowledgementAt: r.acknowledgementAt?.toISOString() ?? null,
+    understanding: r.understanding,
+    concernQuestion: r.concernQuestion,
+    nextStepExplained: r.nextStepExplained,
+    attemptAt: r.attemptAt.toISOString(),
+    actor: userMap.get(r.actorId) ?? r.actorId,
+  }))
+}
+

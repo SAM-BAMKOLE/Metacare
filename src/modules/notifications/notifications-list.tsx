@@ -56,6 +56,7 @@ const typeMeta: Record<
     tone: "default",
   },
   escalated: { label: "Escalation", icon: AlertTriangle, tone: "danger" },
+  referral_created: { label: "Referral created", icon: Send, tone: "default" },
 }
 
 const toneCls = {
@@ -188,7 +189,11 @@ export function NotificationsList({ initial }: { initial: AppNotification[] }) {
         ) : (
           <ul className="divide-y">
             {visible.map((n) => {
-              const meta = typeMeta[n.type]
+              const meta = typeMeta[n.type] ?? {
+                label: n.type,
+                icon: Bell,
+                tone: "default",
+              }
               const Icon = meta.icon
               const d = deliveryMeta[n.delivery]
               const DIcon = d.icon

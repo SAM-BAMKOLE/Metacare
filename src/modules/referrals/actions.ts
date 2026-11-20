@@ -4,11 +4,18 @@ import { redirect } from "next/navigation"
 import { z } from "zod"
 
 import { db } from "@/lib/db"
-import { getCurrentMembership, requireRole } from "@/server/permissions"
+import {
+  AuthorizationError,
+  getCurrentMembership,
+  requireRole,
+} from "@/server/permissions"
 import {
   assignOwnerByName as assignOwnerByNameServer,
   createReferral as createReferralServer,
   transitionReferral as transitionReferralServer,
+  createEscalation as createEscalationServer,
+  acknowledgeEscalation as acknowledgeEscalationServer,
+  resolveEscalation as resolveEscalationServer,
   type ReferralStatus,
 } from "@/server/referrals"
 
@@ -39,7 +46,14 @@ export async function assignOwner(
   if (!membership) {
     return { ok: false, error: "No organisation membership found." }
   }
-  await requireRole([...allowedRoles])
+  try {
+    await requireRole([...allowedRoles])
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return { ok: false, error: err.message }
+    }
+    throw err
+  }
 
   if (!referralId || !owner) {
     return { ok: false, error: "Choose an owner." }
@@ -66,7 +80,14 @@ export async function transitionReferral(
   if (!membership) {
     return { ok: false, error: "No organisation membership found." }
   }
-  await requireRole([...allowedRoles])
+  try {
+    await requireRole([...allowedRoles])
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return { ok: false, error: err.message }
+    }
+    throw err
+  }
 
   const toSnake = statusLabelToSnake[to]
   if (!toSnake) {
@@ -100,7 +121,14 @@ export async function createReferral(
   if (!membership) {
     return { error: "No organisation membership found." }
   }
-  await requireRole(["care_coordinator", "clinician"])
+  try {
+    await requireRole(["care_coordinator", "clinician"])
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return { error: err.message }
+    }
+    throw err
+  }
 
   const schema = z.object({
     patientId: z.string().min(1, "Patient is required."),
@@ -144,4 +172,133 @@ export async function createReferral(
       error: err instanceof Error ? err.message : "Failed to create referral.",
     }
   }
+}
+
+export async function createEscalation(
+  referralId: string,
+  formData: FormData
+): Promise<{ error: string | null }> {
+  const membership = await getCurrentMembership()
+  if (!membership) {
+    return { error: "No organisation membership found." }
+  }
+  try {
+    await requireRole(["care_coordinator", "clinician", "organization_admin"])
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return { error: err.message }
+    }
+    throw err
+  }
+
+  const schema = z.object({
+    escalatedToId: z.string().min(1, "Choose the user to escalate to."),
+    reason: z.string().min(1, "Escalation reason is required."),
+  })
+
+  const parsed = schema.safeParse({
+    escalatedToId: formData.get("escalatedToId"),
+    reason: formData.get("reason"),
+  })
+
+  if (!parsed.success) {
+    return {
+      error: parsed.error.issues[0]?.message ?? "Check the form and try again.",
+    }
+  }
+
+  try {
+    await createEscalationServer(
+      referralId,
+      membership.userId ?? "",
+      parsed.data.escalatedToId,
+      parsed.data.reason,
+    )
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : "Failed to escalate referral.",
+    }
+  }
+
+  return { error: null }
+}
+
+export async function acknowledgeEscalation(
+  escalationId: string,
+  formData: FormData
+): Promise<{ error: string | null }> {
+  const membership = await getCurrentMembership()
+  if (!membership) {
+    return { error: "No organisation membership found." }
+  }
+  try {
+    await requireRole([
+      "care_coordinator",
+      "clinician",
+      "organization_admin",
+      "receiving_provider_staff",
+    ])
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return { error: err.message }
+    }
+    throw err
+  }
+
+  try {
+    await acknowledgeEscalationServer(escalationId, membership.userId ?? "")
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : "Failed to acknowledge escalation.",
+    }
+  }
+
+  return { error: null }
+}
+
+export async function resolveEscalation(
+  escalationId: string,
+  formData: FormData
+): Promise<{ error: string | null }> {
+  const membership = await getCurrentMembership()
+  if (!membership) {
+    return { error: "No organisation membership found." }
+  }
+  try {
+    await requireRole([
+      "care_coordinator",
+      "clinician",
+      "organization_admin",
+      "receiving_provider_staff",
+    ])
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return { error: err.message }
+    }
+    throw err
+  }
+
+  const schema = z.object({
+    actionTaken: z.string().min(1, "Action taken is required."),
+  })
+
+  const parsed = schema.safeParse({
+    actionTaken: formData.get("actionTaken"),
+  })
+
+  if (!parsed.success) {
+    return {
+      error: parsed.error.issues[0]?.message ?? "Check the form and try again.",
+    }
+  }
+
+  try {
+    await resolveEscalationServer(escalationId, membership.userId ?? "", parsed.data.actionTaken)
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : "Failed to resolve escalation.",
+    }
+  }
+
+  return { error: null }
 }

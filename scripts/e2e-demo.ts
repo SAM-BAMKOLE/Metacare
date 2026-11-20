@@ -22,6 +22,7 @@ import {
   careEvents,
   auditLogs,
   user as authUser,
+  escalations,
 } from "@/db/schema"
 
 // Import server actions that don't require Next.js session context
@@ -46,6 +47,10 @@ import {
   getUnassignedReferrals,
   getAwaitingAcknowledgementReferrals,
   isOverdue,
+  createEscalation as createEscalationServer,
+  acknowledgeEscalation as acknowledgeEscalationServer,
+  resolveEscalation as resolveEscalationServer,
+  getEscalationsForReferral,
   type ReferralStatus,
 } from "@/server/referrals"
 import {
@@ -59,6 +64,10 @@ const DEMO_PASSWORD = "Demo1234!"
 
 let passed = 0
 let failed = 0
+
+let REFERRAL_ID: string
+let RECEIVER_ID: string
+let COORDINATOR_ID: string
 
 function check(name: string, condition: boolean, detail?: string) {
   if (condition) {
@@ -98,6 +107,13 @@ async function main() {
         result.user?.email === u.email,
         result.user ? "" : "no user returned"
       )
+      // Capture IDs for later use
+      if (u.email === "receiver@receiving.facility") {
+        RECEIVER_ID = result.user.id
+      }
+      if (u.email === "coordinator@community.clinic") {
+        COORDINATOR_ID = result.user.id
+      }
     } catch (e: any) {
       check(`Sign-in: ${u.email}`, false, e.message)
     }
@@ -151,7 +167,6 @@ async function main() {
   const patientA = await db
     .select()
     .from(patients)
-    .where(eq(patients.internalId, "PAT-0001"))
     .limit(1)
 
   if (patientA.length > 0) {
@@ -269,47 +284,48 @@ async function main() {
       priority: "high",
       dueDate: new Date("2026-11-30T00:00:00Z"),
       status: "draft",
-      instructions: "E2E test referral instructions.",
+      instructions: "Referral created for escalation test",
       patientCommunicationStatus: "not_contacted",
       providerAcknowledgementStatus: "not_acknowledged",
     }).returning()
+    REFERRAL_ID = referral.id
 
     check("Create referral (draft)", referral.status === "draft")
 
     // Valid transition: draft → pending_assignment
-    const t1 = await transitionReferral(referral.id, "pending_assignment", "system-test-coordinator", "Assigning owner")
+    const t1 = await transitionReferral(referral.id, "pending_assignment", COORDINATOR_ID!, "Assigning owner")
     check("Transition draft → pending_assignment", t1.status === "pending_assignment")
 
     // Valid transition: pending_assignment → ready_to_send
-    const t2 = await transitionReferral(referral.id, "ready_to_send", "system-test-coordinator", "Ready to send")
+    const t2 = await transitionReferral(referral.id, "ready_to_send", COORDINATOR_ID!, "Ready to send")
     check("Transition pending_assignment → ready_to_send", t2.status === "ready_to_send")
 
     // Valid transition: ready_to_send → sent
-    const t3 = await transitionReferral(referral.id, "sent", "system-test-coordinator", "Transmitted to receiving facility")
+    const t3 = await transitionReferral(referral.id, "sent", COORDINATOR_ID!, "Transmitted to receiving facility")
     check("Transition ready_to_send → sent", t3.status === "sent")
 
     // Valid transition: sent → awaiting_acknowledgement
-    const t4 = await transitionReferral(referral.id, "awaiting_acknowledgement", "system-test-coordinator", "Sent to receiving provider")
+    const t4 = await transitionReferral(referral.id, "awaiting_acknowledgement", COORDINATOR_ID!, "Sent to receiving provider")
     check("Transition sent → awaiting_acknowledgement", t4.status === "awaiting_acknowledgement")
 
     // INVALID transition: awaiting_acknowledgement → completed (skipping steps)
     try {
-      await transitionReferral(referral.id, "completed", "system-test-coordinator", "Invalid skip")
+      await transitionReferral(referral.id, "completed", COORDINATOR_ID!, "Invalid skip")
       check("Block invalid transition: awaiting_acknowledgement → completed", false, "should have thrown")
     } catch (e: any) {
       check("Block invalid transition: awaiting_acknowledgement → completed", true, e.message)
     }
 
     // Valid transition: awaiting_acknowledgement → acknowledged
-    const t5 = await transitionReferral(referral.id, "acknowledged", "system-test-receiver", "Receiving provider acknowledged")
+    const t5 = await transitionReferral(referral.id, "acknowledged", RECEIVER_ID!, "Receiving provider acknowledged")
     check("Transition awaiting_acknowledgement → acknowledged", t5.status === "acknowledged")
 
     // Valid transition: acknowledged → in_progress
-    const t6 = await transitionReferral(referral.id, "in_progress", "system-test-receiver", "Assessment started")
+    const t6 = await transitionReferral(referral.id, "in_progress", RECEIVER_ID!, "Assessment started")
     check("Transition acknowledged → in_progress", t6.status === "in_progress")
 
     // Valid transition: in_progress → completed
-    const t7 = await transitionReferral(referral.id, "completed", "system-test-coordinator", "Follow-up documented")
+    const t7 = await transitionReferral(referral.id, "completed", COORDINATOR_ID!, "Follow-up documented")
     check("Transition in_progress → completed", t7.status === "completed")
 
     // Verify care events were created for transitions
@@ -335,7 +351,12 @@ async function main() {
     const updated = await recordPatientCommunication(
       ref.id,
       "Phone call",
+      "English",
       "contacted",
+      new Date().toISOString(),
+      "confirmed",
+      null,
+      true,
       "Patient acknowledged instructions.",
       "system-test-coordinator"
     )
@@ -357,7 +378,7 @@ async function main() {
   }
 
   // ── 7. OVERRIDE DETECTION & WORK QUEUES ─────────────────────────
-  console.log("\n7. OVERDUE DETECTION & WORK QUEUES\n")
+  console.log("\n7. OVERRIDE DETECTION & WORK QUEUES\n")
 
   const orgForQueue = orgRef.length > 0 ? orgRef[0].id : null
   if (orgForQueue) {
@@ -452,10 +473,10 @@ async function main() {
   check("Exception referral in overdue queue", overdueList.some((r) => r.id === excRef.id))
 
   // Correct lifecycle: sent → awaiting_acknowledgement → acknowledged
-  const excAck1 = await transitionReferral(excRef.id, "awaiting_acknowledgement", "system-test-coordinator", "Sent to receiving facility")
+  const excAck1 = await transitionReferral(excRef.id, "awaiting_acknowledgement", COORDINATOR_ID!, "Sent to receiving facility")
   check("Exception referral → awaiting_acknowledgement", excAck1.status === "awaiting_acknowledgement")
 
-  const excAck2 = await transitionReferral(excRef.id, "acknowledged", "system-test-receiver", "Late acknowledgement")
+  const excAck2 = await transitionReferral(excRef.id, "acknowledged", RECEIVER_ID!, "Late acknowledgement")
   check("Exception referral → acknowledged", excAck2.status === "acknowledged")
 
   // An acknowledged referral with a past due date is STILL overdue
@@ -489,7 +510,7 @@ async function main() {
     closeRef.id,
     "Follow-up completed and documented",
     "Patient attended all appointments. Condition resolved.",
-    "system-test-coordinator",
+    COORDINATOR_ID!,
     true // acknowledged
   )
   check("Close referral (completed)", closed.status === "completed")
@@ -505,6 +526,64 @@ async function main() {
       )
     ).limit(1)
   check("Audit: referral.close action exists", closeAudit.length > 0)
+
+  // ── 12. ESCALATION — Human Escalation ────────────────────────────────
+  console.log("\n12. ESCALATION — Human Escalation\n")
+
+  // Create an escalation for a referral
+  const [escRef] = await db.select().from(referrals)
+    .where(eq(referrals.id, REFERRAL_ID))
+    .limit(1)
+
+  const esc = await createEscalationServer(
+    escRef.id,
+    COORDINATOR_ID,
+    RECEIVER_ID,
+    "Patient condition worsened, needs specialist review",
+  )
+  check("Create escalation", esc.id !== undefined)
+  check("Escalation referral ID matches", esc.referralId === escRef.id)
+
+  // Verify escalation was recorded
+  const escList = await getEscalationsForReferral(escRef.id)
+  check("Escalation list has entry", escList.length >= 1)
+  check("Escalation reason recorded", escList[0].reason === "Patient condition worsened, needs specialist review")
+  check("Escalation escalatedBy is coordinator", escList[0].escalatedBy === COORDINATOR_ID)
+
+  // Acknowledge escalation as receiving provider
+  const escAck = await acknowledgeEscalationServer(esc.id, RECEIVER_ID)
+  check("Escalation acknowledged", escAck.acknowledgedAt !== null)
+
+  // Verify acknowledgement recorded
+  const escAckCheck = await db.select().from(escalations)
+    .where(eq(escalations.id, esc.id)).limit(1)
+  check("Escalation acknowledgement recorded", escAckCheck[0].acknowledgedAt !== null)
+  check("Escalation acknowledgement by receiver", escAckCheck[0].acknowledgedBy === RECEIVER_ID)
+
+  // Resolve escalation with action taken
+  const escResolved = await resolveEscalationServer(
+    esc.id,
+    RECEIVER_ID,
+    "Specialist review completed, patient referred to cardiology",
+  )
+  check("Escalation resolved", escResolved.actionTaken === "Specialist review completed, patient referred to cardiology")
+
+  // Verify resolution recorded
+  const escResolvedCheck = await db.select().from(escalations)
+    .where(eq(escalations.id, esc.id)).limit(1)
+  check("Escalation resolution recorded", escResolvedCheck[0].actionTaken === "Specialist review completed, patient referred to cardiology")
+
+  // Verify audit logs for escalation
+  const escAudit = await db.select().from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.entityId, esc.id),
+        eq(auditLogs.entityType, "escalation")
+      )
+    )
+  check("Audit: escalation.create action exists", escAudit.length > 0)
+  check("Audit: escalation.acknowledge action exists", escAudit.some((a) => a.action === "referral.escalation.acknowledge"))
+  check("Audit: escalation.resolve action exists", escAudit.some((a) => a.action === "referral.escalation.resolve"))
 
   // ── SUMMARY ─────────────────────────────────────────────────────
   console.log("\n═══════════════════════════════════════════════════════════════")

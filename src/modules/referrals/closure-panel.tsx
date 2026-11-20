@@ -69,6 +69,8 @@ export function ClosurePanel({
       <h2 className="font-semibold">Closure</h2>
       <p className="mt-0.5 text-sm text-muted-foreground">
         A referral is complete only when an outcome or exception is documented.
+        Clinical review, confirmatory follow-up (if required), and patient
+        communication must all be documented before a case can be closed.
       </p>
 
       {isTerminal ? (
@@ -161,7 +163,7 @@ export function ClosurePanel({
           <FormError message={error} />
           {!canClose && (
             <p className="text-sm text-muted-foreground">
-              Only a care coordinator or clinician can record an outcome.
+              Only a clinician can record a closure outcome.
             </p>
           )}
 
